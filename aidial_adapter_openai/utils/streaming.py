@@ -6,10 +6,10 @@ from uuid import uuid4
 from aidial_sdk.exceptions import HTTPException as DialException
 from aidial_sdk.utils.merge_chunks import merge_chat_completion_chunks
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from openai import APIError, APIStatusError
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 from pydantic import BaseModel
 
+from aidial_adapter_openai.exception_handlers import to_dial_exception
 from aidial_adapter_openai.utils.chat_completion_response import (
     ChatCompletionResponse,
     ChatCompletionStreamingChunk,
@@ -53,12 +53,12 @@ def build_chunk(
 
 
 async def generate_stream(
+    stream: AsyncIterator[dict],
     *,
     get_prompt_tokens: Callable[[], int],
     tokenize_response: Callable[[ChatCompletionResponse], int],
     deployment: str,
     discarded_messages: Optional[list[int]],
-    stream: AsyncIterator[dict],
     eliminate_empty_choices: bool,
 ) -> AsyncIterator[dict]:
 
@@ -98,7 +98,7 @@ async def generate_stream(
     buffer_chunk = None
     response_snapshot = ChatCompletionStreamingChunk()
 
-    error = None
+    error: DialException | None = None
 
     try:
         async for chunk in stream:
@@ -121,15 +121,8 @@ async def generate_stream(
                     yield last_chunk
                 last_chunk = chunk
 
-    except APIError as e:
-        status_code = e.status_code if isinstance(e, APIStatusError) else 500
-        error = DialException(
-            status_code=status_code,
-            message=e.message,
-            type=e.type,
-            param=e.param,
-            code=e.code,
-        ).json_error()
+    except Exception as e:
+        error = to_dial_exception(e)
 
     if last_chunk is not None and buffer_chunk is not None:
         last_chunk = merge_chat_completion_chunks(last_chunk, buffer_chunk)
@@ -160,7 +153,7 @@ async def generate_stream(
         yield last_chunk
 
     if error:
-        yield error
+        raise error
 
 
 def create_stage_chunk(name: str, content: str, stream: bool) -> dict:
@@ -196,7 +189,7 @@ def create_stage_chunk(name: str, content: str, stream: bool) -> dict:
 
 def create_response_from_chunk(
     chunk: dict, exc: DialException | None, stream: bool
-) -> Response:
+) -> AsyncIterator[dict] | Response:
     if not stream:
         if exc is not None:
             return exc.to_fastapi_response()
@@ -208,10 +201,7 @@ def create_response_from_chunk(
         if exc is not None:
             yield exc.json_error()
 
-    return StreamingResponse(
-        to_openai_sse_stream(generator()),
-        media_type="text/event-stream",
-    )
+    return generator()
 
 
 def block_response_to_streaming_chunk(response: dict) -> dict:

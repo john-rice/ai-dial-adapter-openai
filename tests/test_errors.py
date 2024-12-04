@@ -466,7 +466,6 @@ async def test_timeout_error_from_upstream(test_app: httpx.AsyncClient):
         },
     )
 
-    assert response.status_code == 504
     assert response.json() == {
         "error": {
             "message": "Request timed out",
@@ -475,6 +474,7 @@ async def test_timeout_error_from_upstream(test_app: httpx.AsyncClient):
             "display_message": "Request timed out. Please try again later.",
         }
     }
+    assert response.status_code == 504
 
 
 @respx.mock
