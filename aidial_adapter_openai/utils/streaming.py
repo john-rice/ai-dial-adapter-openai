@@ -9,8 +9,6 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 from pydantic import BaseModel
 
-from aidial_adapter_openai.exception_handlers import to_adapter_exception
-from aidial_adapter_openai.utils.adapter_exception import AdapterException
 from aidial_adapter_openai.utils.chat_completion_response import (
     ChatCompletionResponse,
     ChatCompletionStreamingChunk,
@@ -73,15 +71,23 @@ async def generate_stream(
     )
 
     def set_usage(chunk: dict | None, resp: ChatCompletionResponse) -> dict:
-        completion_tokens = tokenize_response(resp)
-        prompt_tokens = get_prompt_tokens()
-
         chunk = chunk or empty_chunk
-        chunk["usage"] = {
-            "completion_tokens": completion_tokens,
-            "prompt_tokens": prompt_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        }
+
+        # Do not fail the whole response if tokenization has failed
+        try:
+            completion_tokens = tokenize_response(resp)
+            prompt_tokens = get_prompt_tokens()
+        except Exception as e:
+            logger.exception(
+                f"caught exception while tokenization: {type(e).__module__}.{type(e).__name__}. "
+                "The tokenization has failed, therefore, the usage won't be reported."
+            )
+        else:
+            chunk["usage"] = {
+                "completion_tokens": completion_tokens,
+                "prompt_tokens": prompt_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
         return chunk
 
     def set_finish_reason(chunk: dict | None, finish_reason: str) -> dict:
@@ -99,7 +105,7 @@ async def generate_stream(
     buffer_chunk = None
     response_snapshot = ChatCompletionStreamingChunk()
 
-    error: AdapterException | None = None
+    error: Exception | None = None
 
     try:
         async for chunk in stream:
@@ -126,10 +132,7 @@ async def generate_stream(
         logger.exception(
             f"caught exception while streaming: {type(e).__module__}.{type(e).__name__}"
         )
-
-        error = to_adapter_exception(e)
-
-        logger.error(f"converted to the adapter exception: {error!r}")
+        error = e
 
     if last_chunk is not None and buffer_chunk is not None:
         last_chunk = merge_chat_completion_chunks(last_chunk, buffer_chunk)
