@@ -447,7 +447,34 @@ async def test_status_error_from_upstream(test_app: httpx.AsyncClient):
     )
 
     assert response.status_code == 400
-    assert response.content == b"Bad request"
+    assert response.text == "Bad request"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_status_error_from_upstream_with_headers(
+    test_app: httpx.AsyncClient,
+):
+    respx.post(
+        "http://localhost:5001/openai/deployments/gpt-4/chat/completions?api-version=2023-03-15-preview"
+    ).respond(
+        status_code=429,
+        content="Too many requests",
+        headers={"Retry-After": "42"},
+    )
+
+    response = await test_app.post(
+        "/openai/deployments/gpt-4/chat/completions?api-version=2023-03-15-preview",
+        json={"messages": [{"role": "user", "content": "Test content"}]},
+        headers={
+            "X-UPSTREAM-KEY": "TEST_API_KEY",
+            "X-UPSTREAM-ENDPOINT": "http://localhost:5001/openai/deployments/gpt-4/chat/completions",
+        },
+    )
+
+    assert response.status_code == 429
+    assert response.text == "Too many requests"
+    assert response.headers["Retry-After"] == "42"
 
 
 @respx.mock
@@ -466,6 +493,7 @@ async def test_timeout_error_from_upstream(test_app: httpx.AsyncClient):
         },
     )
 
+    assert response.status_code == 504
     assert response.json() == {
         "error": {
             "message": "Request timed out",
@@ -474,7 +502,6 @@ async def test_timeout_error_from_upstream(test_app: httpx.AsyncClient):
             "display_message": "Request timed out. Please try again later.",
         }
     }
-    assert response.status_code == 504
 
 
 @respx.mock
@@ -504,7 +531,6 @@ async def test_connection_error_from_upstream(test_app: httpx.AsyncClient):
     }
 
 
-@respx.mock
 @pytest.mark.asyncio
 async def test_incorrect_streaming_request(test_app: httpx.AsyncClient):
     response = await test_app.post(
