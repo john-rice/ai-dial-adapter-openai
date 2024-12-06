@@ -52,8 +52,8 @@ def build_chunk(
 
 
 async def generate_stream(
-    stream: AsyncIterator[dict],
     *,
+    stream: AsyncIterator[dict],
     get_prompt_tokens: Callable[[], int],
     tokenize_response: Callable[[ChatCompletionResponse], int],
     deployment: str,
